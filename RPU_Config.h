@@ -34,7 +34,7 @@
 // Hardware Rev 101 - first RPU CPU interposer release board
 // Hardware Rev 102 - second RPU (with display and WIFI socket)
 // Hardware Rev 200 - RPU on System Alpha
-#define RPU_OS_HARDWARE_REV   200
+#define RPU_OS_HARDWARE_REV   102
 
 // Available Architectures (0-9 is for B/S Boards, 10-19 is for W)
 //  RPU_MPU_ARCHITECTURE 1 = -17, -35, 100, 200, or compatible
