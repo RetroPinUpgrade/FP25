@@ -72,6 +72,7 @@
 #define RPU_NUMBER_OF_PLAYER_DISPLAYS       4
 //#define RPU_BALLY_SIXTH_DISPLAY
 
+#define LISYOutputSerial Serial3 
 
 
 #if (RPU_MPU_ARCHITECTURE==1) 

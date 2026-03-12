@@ -3896,6 +3896,8 @@ unsigned long RPU_InitializeMPUArch10(unsigned long initOptions, byte creditRese
   return retResult;
 }
 
+#if (RPU_OS_HARDWARE_REV==200)
+
 // RPU_MPU_ARCHITECTURE >= 10 (through LISY)
 unsigned long RPU_InitializeMPUArch10ThroughLISY(unsigned long initOptions, byte creditResetSwitch) {
   unsigned long retResult = RPU_RET_NO_ERRORS;
@@ -3952,9 +3954,9 @@ unsigned long RPU_InitializeMPUArch10ThroughLISY(unsigned long initOptions, byte
   return retResult;
 
 }
+#endif // RPU_OS_HARDWARE_REV==200
 
-
-#endif
+#endif // (RPU_MPU_ARCHITECTURE>=10)
 
 #if (DEBUG_MESSAGES==1)
 unsigned long LastSwitchReport = 0;
