@@ -1236,6 +1236,7 @@ void setup() {
 
   // Read parameters from EEProm
   ReadStoredParameters();
+  Credits = 10;
 
   CurrentScores[0] = 0;
   CurrentScores[1] = 0;

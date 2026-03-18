@@ -32,6 +32,10 @@
 #define RPU_OS_HARDWARE_REV 1
 #endif
 
+#ifndef LISYOutputSerial
+#define LISYOutputSerial  Serial3
+#endif
+
 /******************************************************
      The board type, MPU architecture, and supported
      features are all controlled through the
@@ -119,6 +123,19 @@ volatile byte LampStates[RPU_NUM_LAMP_BANKS], LampDim1[RPU_NUM_LAMP_BANKS], Lamp
 volatile byte LampFlashPeriod[RPU_MAX_LAMPS];
 byte DimDivisor1 = 2;
 byte DimDivisor2 = 3;
+
+#if (RPU_OS_HARDWARE_REV==200)
+volatile byte OldLampStates[RPU_NUM_LAMP_BANKS];
+unsigned long LISYLastWatchdog = 0;
+volatile byte LISYISRPass = 0;
+byte LISYNumSwitches = 0;
+byte LISYNumSimpleLamps = 0;
+byte LISYSwitchStates[127];
+char LISYAPIVersion[32];
+char LISYFirmwareVersion[32];
+void RPU_LISYSendGameOverState(boolean gameOver);
+void RPU_LISYSendScore(byte displayNumber, byte numDigits);
+#endif
 
 volatile byte SwitchesMinus2[NUM_SWITCH_BYTES];
 volatile byte SwitchesMinus1[NUM_SWITCH_BYTES];
@@ -1414,6 +1431,10 @@ byte RPU_PullFirstFromSwitchStack() {
 }
 
 boolean RPU_ReadSingleSwitchState(byte switchNum) {
+#if (RPU_OS_HARDWARE_REV==200)
+  return LISYSwitchStates[switchNum] ? true : false;
+#endif
+
   if (switchNum >= MAX_NUM_SWITCHES) return false;
 
   int switchByte = switchNum / 8;
@@ -1463,6 +1484,9 @@ void RPU_ClearUpDownSwitchState() {
 
 // RPU_MPU_ARCHITECTURE >= 10
 boolean RPU_GetUpDownSwitchState() {
+#if (RPU_OS_HARDWARE_REV==200)
+  return LISYSwitchStates[65] ? true : false;
+#endif  
   return UpDownSwitch;
 }
 #endif
@@ -1624,12 +1648,17 @@ boolean RPU_IsSolenoidStackEnabled() {
 }
 
 #elif (RPU_MPU_ARCHITECTURE>=10)
+
 // RPU_MPU_ARCHITECTURE >= 10
 void RPU_SetDisableFlippers(boolean disableFlippers, byte solbit) {
   (void)solbit;
   GameOverLine = disableFlippers;
+#if (RPU_OS_HARDWARE_REV==200)
+  RPU_LISYSendGameOverState(disableFlippers);
+#else
   if (disableFlippers) RPU_DataWrite(PIA_SOLENOID_CONTROL_B, 0x34);
   else RPU_DataWrite(PIA_SOLENOID_CONTROL_B, 0x3C);
+#endif  
 }
 
 // RPU_MPU_ARCHITECTURE >= 10
@@ -1694,9 +1723,20 @@ boolean RPU_IsSolenoidStackEnabled() {
  *    
 *******************************************************/
 #if (RPU_MPU_ARCHITECTURE<15)
+
+
+
 // RPU_MPU_ARCHITECTURE < 15
 byte RPU_SetDisplay(int displayNumber, unsigned long value, boolean blankByMagnitude, byte minDigits, boolean showCommasByMagnitude) {
   if (displayNumber < 0 || displayNumber > 4) return 0;
+
+#if (RPU_OS_HARDWARE_REV==200)
+#if (RPU_MPU_ARCHITECTURE>=13)
+  byte oldDisplayCommas = DisplayCommas;
+#endif  
+  boolean digitsChanged = false;
+  byte oldBlank = DisplayDigitEnable[displayNumber];
+#endif
 
   byte blank = 0x00;
 #if (RPU_MPU_ARCHITECTURE>=13)
@@ -1723,12 +1763,25 @@ byte RPU_SetDisplay(int displayNumber, unsigned long value, boolean blankByMagni
 #else
     (void)showCommasByMagnitude;
 #endif
+#if (RPU_OS_HARDWARE_REV==200)
+    byte lastDigit = DisplayDigits[displayNumber][(RPU_OS_NUM_DIGITS - 1) - count];
+#endif
     DisplayDigits[displayNumber][(RPU_OS_NUM_DIGITS - 1) - count] = value % 10;
+#if (RPU_OS_HARDWARE_REV==200)
+    if (lastDigit!=DisplayDigits[displayNumber][(RPU_OS_NUM_DIGITS - 1) - count]) digitsChanged = true;
+#endif
     value /= 10;
   }
 
   if (blankByMagnitude) DisplayDigitEnable[displayNumber] = blank;
 
+#if (RPU_OS_HARDWARE_REV==200)
+#if (RPU_MPU_ARCHITECTURE>=13)
+  if (oldDisplayCommas!=DisplayCommas || digitsChanged || oldBlank!=DisplayDigitEnable[displayNumber]) RPU_LISYSendScore(displayNumber, RPU_OS_NUM_DIGITS);
+#else
+  if (digitsChanged || oldBlank!=DisplayDigitEnable[displayNumber]) RPU_LISYSendScore(displayNumber, RPU_OS_NUM_DIGITS);
+#endif
+#endif
   return blank;
 }
 #endif
@@ -1777,6 +1830,12 @@ void RPU_SetDisplayBallInPlay(int value, boolean displayOn, boolean showBothDigi
 
 // RPU_MPU_ARCHITECTURE < 15
 void RPU_SetDisplayCredits(int value, boolean displayOn, boolean showBothDigits) {
+#if (RPU_OS_HARDWARE_REV==200)
+  byte previousDigits[2];
+  previousDigits[0] = DisplayCreditDigits[0];
+  previousDigits[1] = DisplayCreditDigits[1];
+  byte previousBlank = DisplayCreditDigitEnable;
+#endif   
   byte blank = 0x02;
   value = value % 100;
   if (value >= 10) {
@@ -1789,10 +1848,21 @@ void RPU_SetDisplayCredits(int value, boolean displayOn, boolean showBothDigits)
   DisplayCreditDigits[1] = value % 10;
   if (displayOn) DisplayCreditDigitEnable = blank;
   else DisplayCreditDigitEnable = 0;
+#if (RPU_OS_HARDWARE_REV==200)
+  if (  DisplayCreditDigits[0]!=previousDigits[0] || 
+        DisplayCreditDigits[1]!=previousDigits[1] || 
+        previousBlank!=DisplayCreditDigitEnable ) RPU_LISYSendScore(4, 2);
+#endif   
 }
 
 // RPU_MPU_ARCHITECTURE < 15
 void RPU_SetDisplayBallInPlay(int value, boolean displayOn, boolean showBothDigits) {
+#if (RPU_OS_HARDWARE_REV==200)
+  byte previousDigits[2];
+  previousDigits[0] = DisplayBIPDigits[0];
+  previousDigits[1] = DisplayBIPDigits[1];
+  byte previousBlank = DisplayBIPDigitEnable;
+#endif   
   byte blank = 0x02;
   value = value % 100;
   if (value >= 10) {
@@ -1805,6 +1875,11 @@ void RPU_SetDisplayBallInPlay(int value, boolean displayOn, boolean showBothDigi
   DisplayBIPDigits[1] = value % 10;
   if (displayOn) DisplayBIPDigitEnable = blank;
   else DisplayBIPDigitEnable = 0;
+#if (RPU_OS_HARDWARE_REV==200)
+  if (  DisplayBIPDigits[0]!=previousDigits[0] || 
+        DisplayBIPDigits[1]!=previousDigits[1] || 
+        previousBlank!=DisplayBIPDigitEnable ) RPU_LISYSendScore(5, 2);
+#endif  
 }
 
 #endif
@@ -1892,14 +1967,33 @@ void RPU_SetDisplayMatch(int value, boolean displayOn, boolean showBothDigits) {
 void RPU_SetDisplayBlank(int displayNumber, byte bitMask) {
   if (displayNumber < 0 || displayNumber > 4) return;
 
+#if (RPU_OS_HARDWARE_REV==200)
+  boolean sendScore = false;
+#endif
+
 #if (RPU_MPU_ARCHITECTURE>=13)
   if (bitMask == 0x00) {
     byte commaBit = 0x01 << (2 * displayNumber);
+    byte oldCommas = DisplayCommas;
     DisplayCommas &= ~(commaBit | (commaBit * 2));
+#if (RPU_OS_HARDWARE_REV==200)
+    if (DisplayCommas!=oldCommas) sendScore = true;
+#else
+    (void)oldCommas;
+#endif
+
   }
+#endif
+#if (RPU_OS_HARDWARE_REV==200)
+  if (DisplayDigitEnable[displayNumber]!=bitMask) sendScore = true;
 #endif
 
   DisplayDigitEnable[displayNumber] = bitMask;
+
+#if (RPU_OS_HARDWARE_REV==200)
+  if (sendScore) RPU_LISYSendScore(displayNumber, RPU_OS_NUM_DIGITS);
+#endif
+
 }
 
 byte RPU_GetDisplayBlank(int displayNumber) {
@@ -2188,6 +2282,10 @@ void RPU_ClearVariables() {
     LampStates[lampBankCounter] = 0xFF;
     LampDim1[lampBankCounter] = 0x00;
     LampDim2[lampBankCounter] = 0x00;
+
+#if (RPU_OS_HARDWARE_REV==200)
+    OldLampStates[lampBankCounter] = 0xFF;
+#endif    
   }
 
   for (int lampFlashCount = 0; lampFlashCount < RPU_MAX_LAMPS; lampFlashCount++) {
@@ -3442,8 +3540,8 @@ byte BlankingBit[16] = {0x01, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x02, 0x
 volatile byte UpDownPassCounter = 0;
 
 // INTERRUPT HANDLER
-// RPU_MPU_ARCHITECTURE >= 10
-// for ARCH>=10 (WMS)
+// RPU_MPU_ARCHITECTURE >= 10 and RPU_OS_HARDWARE_REV < 200
+#if (RPU_OS_HARDWARE_REV<200)
 ISR(TIMER1_COMPA_vect) {    //This is the interrupt request (running at 965.3 Hz)
 
   byte displayControlPortB = RPU_DataRead(PIA_DISPLAY_CONTROL_B);
@@ -3681,6 +3779,7 @@ ISR(TIMER1_COMPA_vect) {    //This is the interrupt request (running at 965.3 Hz
   InterruptPass ^= 1;
 
 }
+#endif
 
 // RPU_MPU_ARCHITECTURE >= 10
 // This is for Arch >= 10
@@ -3898,6 +3997,395 @@ unsigned long RPU_InitializeMPUArch10(unsigned long initOptions, byte creditRese
 
 #if (RPU_OS_HARDWARE_REV==200)
 
+#define LISY_CMD_RESET                            0x64
+#define LISY_CMD_GET_CONNECTED_HW                 0x00
+#define LISY_CMD_GET_FIRMWARE_VER                 0x01
+#define LISY_CMD_GET_API_VER                      0x02
+#define LISY_CMD_GET_SIMPLE_LAMP_COUNT            0x03
+#define LISY_CMD_GET_SOLENOID_COUNT               0x04
+#define LISY_CMD_GET_SOUND_COUNT                  0x05
+#define LISY_CMD_GET_SEGMENT_DISPLAY_COUNT        0x06
+#define LISY_CMD_GET_SEGMENT_DISPLAY_DETAILS      0x07
+#define LISY_CMD_GET_GAME_INFO                    0x08
+#define LISY_CMD_GET_SWITCH_COUNT                 0x09
+#define LISY_CMD_SET_SIMPLE_LAMP_ON               0x0B
+#define LISY_CMD_SET_SIMPLE_LAMP_OFF              0x0C
+#define LISY_CMD_ENABLE_SOLENOID_FULL_POWER       0x15
+#define LISY_CMD_DISABLE_SOLENOID                 0x16
+#define LISY_CMD_PULSE_SOLENOID                   0x17
+#define LISY_CMD_SET_SOLENOID_PULSE_TIME          0x18
+#define LISY_CMD_SET_SEGMENT_DISPLAY              0x1E
+#define LISY_CMD_GET_STATUS_OF_SWITCH             0x28
+#define LISY_CMD_GET_CHANGED_SWITCHES             0x29
+#define LISY_CMD_PET_WATCHDOG                     0x65
+
+#define LISY_RESPONSE_IDLE                        0x00
+#define LISY_RESPONSE_SWITCHES                    0x01
+#define LISY_RESPONSE_WATCHDOG                    0x02
+
+#define LISY_GAME_OVER_SOLENOID                   23
+
+#define LISY_EXPECT_QUEUE_SIZE 16
+
+struct LISYExpectation {
+  byte ResponseType;
+  unsigned long SendTime;
+};
+
+struct LISYExpectation LISYExpectQueue[LISY_EXPECT_QUEUE_SIZE];
+byte LISYExpectHead = 0;
+byte LISYExpectTail = 0;
+
+// Push an expected response type and timestamp onto the queue
+void RPU_LISYPushExpectation(byte responseType, unsigned long currentTime) {
+  byte nextHead = (LISYExpectHead + 1) % LISY_EXPECT_QUEUE_SIZE;
+  if (nextHead != LISYExpectTail) { // Prevent overflow
+    LISYExpectQueue[LISYExpectHead].ResponseType = responseType;
+    LISYExpectQueue[LISYExpectHead].SendTime = currentTime;
+    LISYExpectHead = nextHead;
+  }
+}
+
+// Pop the oldest expected response type
+byte RPU_LISYPopExpectation() {
+  if (LISYExpectHead == LISYExpectTail) return LISY_RESPONSE_IDLE; // Queue empty
+  byte expected = LISYExpectQueue[LISYExpectTail].ResponseType;
+  LISYExpectTail = (LISYExpectTail + 1) % LISY_EXPECT_QUEUE_SIZE;
+  return expected;
+}
+
+
+
+boolean RPU_LISYRequestValue(byte command, byte &value) {
+  // Flush the RX buffer to ensure we only read the response to this specific command
+  while (LISYOutputSerial.available() > 0) {
+    LISYOutputSerial.read();
+  }
+
+  // Send the single-byte request
+  LISYOutputSerial.write(command);
+
+  unsigned long startTime = millis();
+  
+  // Block for up to 20ms waiting for the 1-byte reply
+  while (millis() - startTime < 20) {
+    if (LISYOutputSerial.available() > 0) {
+      value = LISYOutputSerial.read();
+      return true; // Success, exit early
+    }
+  }
+  
+  return false;
+}
+
+
+boolean RPU_LISYRequestString(byte command, char *value, int maxLength) {
+  // Flush the RX buffer
+  while (LISYOutputSerial.available() > 0) {
+    LISYOutputSerial.read();
+  }
+
+  // Send the single-byte request
+  LISYOutputSerial.write(command);
+
+  unsigned long startTime = millis();
+  int currentIndex = 0;
+
+  // Block for up to 50ms waiting for the complete string
+  while (millis() - startTime < 50) {
+    if (LISYOutputSerial.available() > 0) {
+      char c = (char)LISYOutputSerial.read();
+      
+      // Prevent buffer overflow, leaving room for a forced null terminator
+      if (currentIndex < maxLength - 1) {
+        value[currentIndex++] = c;
+        
+        // Check if we hit the end of the string
+        if (c == '\0') {
+          return true;
+        }
+      } else {
+        // We hit the maximum length without seeing a null terminator
+        value[maxLength - 1] = '\0';
+        return false;
+      }
+    }
+  }
+  
+  // Timeout reached before finishing the string
+  if (maxLength > 0) {
+    value[0] = '\0'; // Safely empty the string on failure
+  }
+  return false;
+}
+
+
+// RPU_MPU_ARCHITCTURE < 15
+void RPU_LISYSendScore(byte displayNumber, byte numDigits) {
+
+#if (RPU_MPU_ARCHITECTURE>=13)
+  // The score could have commas
+  
+#else
+  if (displayNumber<4) {
+    // The score is just BCD
+    noInterrupts();
+    LISYOutputSerial.write(LISY_CMD_SET_SEGMENT_DISPLAY+displayNumber);
+    LISYOutputSerial.write(numDigits);
+    byte blankMask = 0x01;
+    for (byte digit=0; digit<numDigits; digit++) {
+      if (DisplayDigitEnable[displayNumber]&blankMask) LISYOutputSerial.write(DisplayDigits[displayNumber][digit]);
+      else LISYOutputSerial.write(0x0F); // display a blank
+
+      blankMask *= 2;
+    }
+    interrupts();
+  } else if (displayNumber==4) {
+    noInterrupts();
+    LISYOutputSerial.write(LISY_CMD_SET_SEGMENT_DISPLAY+displayNumber);
+    LISYOutputSerial.write(numDigits);
+    byte blankMask = 0x01;
+    for (byte digit=0; digit<numDigits; digit++) {
+      if (DisplayCreditDigitEnable&blankMask) LISYOutputSerial.write(DisplayCreditDigits[digit]);
+      else LISYOutputSerial.write(0x0F); // display a blank
+
+      blankMask *= 2;
+    }
+    interrupts();
+  } else if (displayNumber==5) {
+    noInterrupts();
+    LISYOutputSerial.write(LISY_CMD_SET_SEGMENT_DISPLAY+displayNumber);
+    LISYOutputSerial.write(numDigits);
+    byte blankMask = 0x01;
+    for (byte digit=0; digit<numDigits; digit++) {
+      if (DisplayBIPDigitEnable&blankMask) LISYOutputSerial.write(DisplayBIPDigits[digit]);
+      else LISYOutputSerial.write(0x0F); // display a blank
+
+      blankMask *= 2;
+    }
+    interrupts();
+  }
+#endif
+
+}
+
+
+void RPU_LISYSetSolenoidPulsetime(byte solNum, byte pulseTime) {
+  noInterrupts();
+
+  interrupts();
+}
+
+
+void RPU_LISYSetSimpleLampState(byte lampNum, byte lampOn) {
+  if (lampOn) {
+    LISYOutputSerial.write(LISY_CMD_SET_SIMPLE_LAMP_ON);
+  } else {
+    LISYOutputSerial.write(LISY_CMD_SET_SIMPLE_LAMP_OFF);
+  }
+  LISYOutputSerial.write(lampNum);
+}
+
+void RPU_LISYSendSolenoidPulse(byte solNum) {
+  LISYOutputSerial.write(LISY_CMD_PULSE_SOLENOID);
+  LISYOutputSerial.write(solNum);
+}
+
+
+// Rev 200 ISR for passing commands to LISY
+ISR(TIMER1_COMPA_vect) {    //This is the interrupt request (running at 965.3 Hz)
+  if (LISYISRPass) {
+    // Odd passes = lamps
+    for (byte curLampByte = 0; curLampByte < RPU_NUM_LAMP_BANKS; curLampByte++) {
+      byte changedLamps = OldLampStates[curLampByte] ^ LampStates[curLampByte];
+      if (changedLamps) {
+        byte curLampBit = 0x01;
+        for (byte curBit = 0; curBit < 8; curBit++) {
+          if (changedLamps & curLampBit) {
+            byte lampNum = curBit + curLampByte*8;
+            RPU_LISYSetSimpleLampState(lampNum, (LampStates[curLampByte]&curLampBit) ? false : true);
+          }
+          curLampBit *= 2;
+        }
+        OldLampStates[curLampByte] = LampStates[curLampByte];
+      }
+    }    
+
+    LISYISRPass = 0;
+  } else {
+    // Even passes = solenoids
+    byte solenoidOn = PullFirstFromSolenoidStack();
+    if (solenoidOn!=SOLENOID_STACK_EMPTY) {
+      RPU_LISYSendSolenoidPulse(solenoidOn);
+    }
+    LISYISRPass = 1;
+  }
+
+}
+
+void RPU_LISYFlushBuffer() {
+  while (LISYOutputSerial.available()) LISYOutputSerial.read();
+}
+
+boolean RPU_LISYResetAndGetConnectedHardware(unsigned long numTicksToWait) {
+  LISYOutputSerial.write(LISY_CMD_RESET);
+  LISYOutputSerial.write(LISY_CMD_GET_CONNECTED_HW);
+
+  unsigned long startTime = millis();
+  boolean resetAckSeen = false;
+  boolean hwStrSeen = false;
+  uint8_t dat;
+  while (millis()<(startTime+numTicksToWait)) {
+    if (LISYOutputSerial.available() > 0) {
+      dat = LISYOutputSerial.read();
+      if (!resetAckSeen) {
+        resetAckSeen = true;
+      } else {
+        if (dat==0) hwStrSeen = true;
+      }
+    }
+  }
+
+  // flush the buffer, just in case
+  RPU_LISYFlushBuffer();
+
+  return hwStrSeen;
+}
+
+void RPU_LISYGetFirmwareVersion() {
+  RPU_LISYRequestString(LISY_CMD_GET_FIRMWARE_VER, LISYFirmwareVersion, 32);
+}
+
+void RPU_LISYGetAPIVersion() {
+  RPU_LISYRequestString(LISY_CMD_GET_API_VER, LISYAPIVersion, 32);
+}
+
+void RPU_LISYGetSimpleLamps() {
+  if (!RPU_LISYRequestValue(LISY_CMD_GET_SIMPLE_LAMP_COUNT, LISYNumSimpleLamps)) {
+    LISYNumSimpleLamps = 64;
+  }
+}
+
+void RPU_LISYGetNumSwitches() {
+  if (!RPU_LISYRequestValue(LISY_CMD_GET_SWITCH_COUNT, LISYNumSwitches)) {
+    LISYNumSwitches = 64;
+  }
+}
+
+void RPU_LISYSendGameOverState(boolean gameOver) {
+  noInterrupts();
+  if (!gameOver) {
+    LISYOutputSerial.write(LISY_CMD_ENABLE_SOLENOID_FULL_POWER);
+    LISYOutputSerial.write(LISY_GAME_OVER_SOLENOID);
+  } else {
+    LISYOutputSerial.write(LISY_CMD_DISABLE_SOLENOID);
+    LISYOutputSerial.write(LISY_GAME_OVER_SOLENOID);
+  }
+  interrupts();
+}
+
+
+
+void RPU_LISYReadAllSwitches() {
+  // Clear any lingering bytes in the RX buffer before starting
+  while (LISYOutputSerial.available() > 0) {
+    LISYOutputSerial.read();
+  }
+
+  for (byte switchId = 0; switchId < LISYNumSwitches; switchId++) {
+    bool success = false;
+    byte retries = 3; // Failsafe to prevent an infinite hang on a dead bus
+
+    while (!success && retries > 0) {
+      // Send the two-byte command
+      LISYOutputSerial.write(LISY_CMD_GET_STATUS_OF_SWITCH);
+      LISYOutputSerial.write(switchId);
+
+      unsigned long startTime = millis();
+      
+      // Block for up to 10ms waiting for the 1-byte reply
+      while (millis() - startTime < 10) {
+        if (LISYOutputSerial.available() > 0) {
+          byte response = LISYOutputSerial.read();
+          
+          // 0=Off, 1=On, 2=Not existing
+          if (response == 1) {
+            LISYSwitchStates[switchId] = 1;
+          } else {
+            LISYSwitchStates[switchId] = 0;
+          }
+          
+          success = true;
+          break; // Exit the 10ms wait loop
+        }
+      }
+      
+      if (!success) {
+        retries--;
+      }
+    }
+  }
+}
+
+
+void RPU_LISYProcessIncoming(unsigned long currentTime) {
+  // 1. Prune dead expectations older than 50ms to recover from lost bytes
+  while (LISYExpectHead != LISYExpectTail) {
+    if (currentTime - LISYExpectQueue[LISYExpectTail].SendTime > 50) {
+      LISYExpectTail = (LISYExpectTail + 1) % LISY_EXPECT_QUEUE_SIZE;
+    } else {
+      // The oldest item is valid, so all subsequent ones are too
+      break; 
+    }
+  }
+
+  // 2. Process all available bytes in the hardware buffer
+  while (LISYOutputSerial.available() > 0) {
+    uint8_t response = LISYOutputSerial.read();
+    
+    // Discard unexpected bytes immediately to keep the queue aligned
+    if (LISYExpectHead == LISYExpectTail) {
+      continue;
+    }
+    
+    byte currentExpectation = RPU_LISYPopExpectation();
+    
+    if (currentExpectation == LISY_RESPONSE_SWITCHES) {
+      if (response != 127) {
+        // A switch changed state; update game logic
+        uint8_t switchId = response & 0x7F;
+        bool isClosed = (response & 0x80) != 0;
+        if (isClosed) {
+          if (switchId!=66) RPU_PushToSwitchStack(switchId);
+          else RPU_PushToSwitchStack(SW_SELF_TEST_SWITCH);
+          LISYSwitchStates[switchId] = 1;
+        } else {
+          LISYSwitchStates[switchId] = 0;
+        }
+      }
+    } 
+    // LISY_RESPONSE_WATCHDOG is implicitly handled by simply popping it
+  }
+}
+
+void RPU_LISYUpdate(unsigned long currentTime) {
+  RPU_LISYProcessIncoming(currentTime);
+  
+  if (currentTime > (LISYLastWatchdog + 400)) {
+    LISYLastWatchdog = currentTime;
+    LISYOutputSerial.write(LISY_CMD_PET_WATCHDOG);
+    RPU_LISYPushExpectation(LISY_RESPONSE_WATCHDOG, currentTime);
+  } else {
+    // Burst requests to clear out any backlog on Pete's board
+    for (byte i = 0; i < 3; i++) {
+      LISYOutputSerial.write(LISY_CMD_GET_CHANGED_SWITCHES);
+      RPU_LISYPushExpectation(LISY_RESPONSE_SWITCHES, currentTime);
+    }
+  }
+}
+
+
+
 // RPU_MPU_ARCHITECTURE >= 10 (through LISY)
 unsigned long RPU_InitializeMPUArch10ThroughLISY(unsigned long initOptions, byte creditResetSwitch) {
   unsigned long retResult = RPU_RET_NO_ERRORS;
@@ -3950,7 +4438,30 @@ unsigned long RPU_InitializeMPUArch10ThroughLISY(unsigned long initOptions, byte
   pinMode(RPU_DIAGNOSTIC_PIN, INPUT);
   if (digitalRead(RPU_DIAGNOSTIC_PIN) == 1) retResult |= RPU_RET_DIAGNOSTIC_REQUESTED;
 
+  for (byte count=0; count<127; count++) {
+    LISYSwitchStates[count] = 0;
+  }
+
+  // Init LISY serial port
+  LISYOutputSerial.begin(115200);
+  if (!RPU_LISYResetAndGetConnectedHardware(3000)) {
+    retResult |= RPU_RET_HOST_NOT_DETECTED;
+  } else {
+    RPU_LISYGetFirmwareVersion();
+    RPU_LISYGetAPIVersion();
+    RPU_LISYGetFirmwareVersion();
+    RPU_LISYGetSimpleLamps();
+    RPU_LISYGetNumSwitches();
+
+    // Read the current switch states
+    RPU_LISYReadAllSwitches();
+
+    LISYOutputSerial.write(LISY_CMD_GET_CHANGED_SWITCHES);
+    RPU_LISYPushExpectation(LISY_RESPONSE_SWITCHES, millis());
+  }
+
   RPU_ClearVariables();
+  RPU_SetupInterrupt();
   return retResult;
 
 }
@@ -3972,6 +4483,10 @@ void RPU_Update(unsigned long currentTime) {
   RPU_UpdateTimedSolenoidStack(currentTime);
 #if (RPU_MPU_ARCHITECTURE>=10) && (defined(RPU_OS_USE_WTYPE_1_SOUND) || defined(RPU_OS_USE_WTYPE_2_SOUND))
   RPU_UpdateTimedSoundStack(currentTime);
+#endif
+
+#if (RPU_OS_HARDWARE_REV==200)
+  RPU_LISYUpdate(currentTime);
 #endif
 
 }
