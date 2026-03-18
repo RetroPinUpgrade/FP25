@@ -11,7 +11,7 @@ RPU now supports System Alpha X1 board. To use with System Alpha X1, go into RPU
 ```
 
 
-Instructions for building & installing RPU  
+## Instructions for building & installing RPU   
 https://www.pinballrefresh.com/retro-pin-upgrade-rpu  
 
 
