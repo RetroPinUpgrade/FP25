@@ -6,7 +6,10 @@ https://drive.google.com/file/d/1dPshBA-HTyUY-mqY1CPyCSn1dWKvC27p/view?usp=shari
 
 ## System Alpha Support  
 RPU now supports System Alpha X1 board. To use with System Alpha X1, go into RPU_Config.h and set the hardware revision to 200:  
-```#define RPU_OS_HARDWARE_REV   200
+```
+#define RPU_OS_HARDWARE_REV   200
+```
+
 
 Instructions for building & installing RPU  
 https://www.pinballrefresh.com/retro-pin-upgrade-rpu  
