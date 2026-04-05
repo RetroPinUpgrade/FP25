@@ -574,6 +574,8 @@ unsigned long LastTimeJackpotAdjusted = 0;
 unsigned long LastLoopTick = 0;
 unsigned long LeftInlaneLastHitTime;
 unsigned long RightInlaneLastHitTime;
+unsigned long LastCoinSwitchTime[3];
+unsigned long LastStartButtonSwitchTime;
 
 #define BATTLE_ONE_FINISH_EJECT       0
 #define BATTLE_ONE_FINISH_REQUALIFY   1
@@ -1044,7 +1046,7 @@ unsigned short SolenoidConvertDisplayNumberToIndex(byte displayNumber) {
     case  6: return SOL_TOP_SAUCER;
     case  7: return SOL_BALLSAVE_KICKER;
     case  8: return SOL_OUTHOLE;
-    case  9: return 8;
+    case  9: return 8; // sounds
     case 10: return 9;
     case 11: return 10;
     case 12: return 11;
@@ -1057,15 +1059,15 @@ unsigned short SolenoidConvertDisplayNumberToIndex(byte displayNumber) {
     case 13: return OPERATOR_MENU_VALUE_UNUSED;
 */    
     case 14: return SOL_KNOCKER;
-    case 15: return 14;
+    case 15: return OPERATOR_MENU_VALUE_UNUSED;
 //    case 15: return OPERATOR_MENU_VALUE_UNUSED; 
     case 16: return SOLCONT_COIN_LOCKOUT;
-    case 17: return OPERATOR_MENU_VALUE_UNUSED; // top left pop
-    case 18: return OPERATOR_MENU_VALUE_UNUSED; // bottom left pop
-    case 19: return OPERATOR_MENU_VALUE_OUT_OF_RANGE; // top right pop
-    case 20: return OPERATOR_MENU_VALUE_OUT_OF_RANGE; // bottom right pop
-    case 21: return OPERATOR_MENU_VALUE_OUT_OF_RANGE; // right sling
-    case 22: return OPERATOR_MENU_VALUE_OUT_OF_RANGE; // left sling
+    case 17: return 16; // top left pop
+    case 18: return 17; // bottom left pop
+    case 19: return 18; // top right pop
+    case 20: return 19; // bottom right pop
+    case 21: return 20; // right sling
+    case 22: return 21; // left sling
     default: return OPERATOR_MENU_VALUE_OUT_OF_RANGE;
   }
 }
@@ -1126,7 +1128,7 @@ byte FPSoundTestCallback(byte testNum) {
     Audio.PlaySoundCardWhenPossible((testNum-3) * 256, CurrentTime+50, 0, 2000, 10);
   }
 
-  if (testNum>35) return 0;
+  if (testNum>33) return 0;
   else return 1;
 }
 
@@ -1198,7 +1200,7 @@ void setup() {
   // If the hardware has the ability to switch on the Credit/Reset button (requires Rev 4 or greater)
   // then that can be used to choose Original or New code. Otherwise, the hardware switch
   // will choose Original if open, and New if closed
-  initResult = RPU_InitializeMPU(   RPU_CMD_BOOT_ORIGINAL_IF_CREDIT_RESET | RPU_CMD_BOOT_ORIGINAL_IF_SWITCH_CLOSED |
+  initResult = RPU_InitializeMPU(   RPU_CMD_BOOT_ORIGINAL_IF_CREDIT_RESET | /*RPU_CMD_BOOT_ORIGINAL_IF_SWITCH_CLOSED |*/
                                     RPU_CMD_INIT_AND_RETURN_EVEN_IF_ORIGINAL_CHOSEN | RPU_CMD_PERFORM_MPU_TEST, SW_CREDIT_RESET);
 
   if (DEBUG_MESSAGES) {
@@ -1236,7 +1238,6 @@ void setup() {
 
   // Read parameters from EEProm
   ReadStoredParameters();
-  Credits = 10;
 
   CurrentScores[0] = 0;
   CurrentScores[1] = 0;
@@ -1262,6 +1263,8 @@ void setup() {
   Menus.SetSoundCallbackFunction(FPSoundTestCallback);
   BallRampKicked = 0;
   for (byte count=0; count<3; count++) LastSaucerEjectTime[count] = 0;
+  for (byte count=0; count<3; count++) LastCoinSwitchTime[count] = 0;
+  LastStartButtonSwitchTime = 0;
 }
 
 
@@ -1900,7 +1903,7 @@ boolean AddPlayer(boolean resetNumPlayers = false) {
     Credits -= 1;
     RPU_WriteByteToEEProm(RPU_CREDITS_EEPROM_BYTE, Credits);
     RPU_SetDisplayCredits(Credits, !FreePlayMode);
-//    RPU_SetCoinLockout(false);
+    if (!FreePlayMode) RPU_SetCoinLockout(false, SOLCONT_COIN_LOCKOUT);
   }
 
   RPU_WriteULToEEProm(RPU_TOTAL_PLAYS_EEPROM_START_BYTE, RPU_ReadULFromEEProm(RPU_TOTAL_PLAYS_EEPROM_START_BYTE) + 1);
@@ -1927,17 +1930,19 @@ void AddCredit(boolean playSound = false, byte numToAdd = 1) {
       RPU_PushToSolenoidStack(SOL_KNOCKER, KNOCKER_SOLENOID_STRENGTH, true);
     }
     RPU_SetDisplayCredits(Credits, !FreePlayMode);
-//    RPU_SetCoinLockout(false);
+    if (!FreePlayMode) RPU_SetCoinLockout(false, SOLCONT_COIN_LOCKOUT);
   } else {
     RPU_SetDisplayCredits(Credits, !FreePlayMode);
-//    RPU_SetCoinLockout(true);
+    if (!FreePlayMode) RPU_SetCoinLockout(true, SOLCONT_COIN_LOCKOUT);
+    else RPU_SetCoinLockout(false, SOLCONT_COIN_LOCKOUT);
   }
 
 }
 
 byte SwitchToChuteNum(byte switchHit) {
-  (void)switchHit;
-  byte chuteNum = 0;
+  byte chuteNum = 0; // default to SW_COIN_1
+  if (switchHit==SW_COIN_2) chuteNum = 1;
+  if (switchHit==SW_COIN_3) chuteNum = 2;
   return chuteNum;
 }
 
@@ -2823,6 +2828,8 @@ int RunAttractMode(int curState, boolean curStateChanged) {
     AttractModeStartTime = CurrentTime;
     Audio.PlaySoundCardWhenPossible(19 * 256, CurrentTime, 0, 500, 10);
     ShowHeadAndApronLamps();
+    if (!FreePlayMode) RPU_SetCoinLockout((Credits >= MaximumCredits) ? true : false, SOLCONT_COIN_LOCKOUT);
+    else RPU_SetCoinLockout(false, SOLCONT_COIN_LOCKOUT);
   }
 
   EjectAllBallsFromSaucers();
@@ -2894,11 +2901,18 @@ int RunAttractMode(int curState, boolean curStateChanged) {
   byte switchHit;
   while ( (switchHit = RPU_PullFirstFromSwitchStack()) != SWITCH_STACK_EMPTY ) {
     if (switchHit == SW_CREDIT_RESET) {
-      if (AddPlayer(true)) returnState = MACHINE_STATE_INIT_GAMEPLAY;
+      if ((CurrentTime-LastStartButtonSwitchTime)>250) {
+        LastStartButtonSwitchTime = CurrentTime;
+        if (AddPlayer(true)) returnState = MACHINE_STATE_INIT_GAMEPLAY;
+      }
     }
-    if (switchHit == SW_COIN_1) {
-      AddCoinToAudit(SwitchToChuteNum(switchHit));
-      AddCoin(SwitchToChuteNum(switchHit));
+    if (switchHit == SW_COIN_1 || switchHit == SW_COIN_2 || switchHit == SW_COIN_3) {
+      byte chuteNum = SwitchToChuteNum(switchHit);
+      if ((CurrentTime-LastCoinSwitchTime[chuteNum])>250) {
+        LastCoinSwitchTime[chuteNum] = CurrentTime;
+        AddCoinToAudit(chuteNum);
+        AddCoin(chuteNum);
+      }
     }
     if (switchHit == SW_SELF_TEST_SWITCH) {
       Menus.EnterOperatorMenu();
@@ -2907,7 +2921,7 @@ int RunAttractMode(int curState, boolean curStateChanged) {
 
   // If the user was holding the menu button when the game started
   // then kick the balls
-  if (CurrentTime < 4000) {
+  if (0 && CurrentTime < 4000) {    
     if (RPU_ReadSingleSwitchState(SW_SELF_TEST_SWITCH)) {
       if (OperatorSwitchPressStarted==0) {
         OperatorSwitchPressStarted = CurrentTime;
@@ -3026,7 +3040,7 @@ int InitGamePlay(boolean curStateChanged) {
     // The start button has been hit only once to get
     // us into this mode, so we assume a 1-player game
     // at the moment
-    RPU_SetCoinLockout((Credits >= MaximumCredits) ? true : false);
+    if (!FreePlayMode) RPU_SetCoinLockout((Credits >= MaximumCredits) ? true : false, SOLCONT_COIN_LOCKOUT);
   
     // Reset displays & game state variables
     for (int count = 0; count < RPU_NUMBER_OF_PLAYERS_ALLOWED; count++) {
@@ -4904,8 +4918,16 @@ int HandleSystemSwitches(int curState, byte switchHit) {
       Menus.EnterOperatorMenu();
       break;
     case SW_COIN_1:
-      AddCoinToAudit(SwitchToChuteNum(switchHit));
-      AddCoin(SwitchToChuteNum(switchHit));
+    case SW_COIN_2:
+    case SW_COIN_3:
+      {
+        byte chuteNum = SwitchToChuteNum(switchHit);
+        if ((CurrentTime-LastCoinSwitchTime[chuteNum])>250) {
+          LastCoinSwitchTime[chuteNum] = CurrentTime;
+          AddCoinToAudit(chuteNum);
+          AddCoin(chuteNum);
+        }
+      }
       break;
     case SW_CREDIT_RESET:
       if (MachineState == MACHINE_STATE_MATCH_MODE) {

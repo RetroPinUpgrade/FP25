@@ -129,12 +129,16 @@ volatile byte OldLampStates[RPU_NUM_LAMP_BANKS];
 unsigned long LISYLastWatchdog = 0;
 volatile byte LISYISRPass = 0;
 byte LISYNumSwitches = 0;
+byte LISYNumSounds = 0;
 byte LISYNumSimpleLamps = 0;
 byte LISYSwitchStates[127];
 char LISYAPIVersion[32];
 char LISYFirmwareVersion[32];
+// Forward function references
 void RPU_LISYSendGameOverState(boolean gameOver);
 void RPU_LISYSendScore(byte displayNumber, byte numDigits);
+void RPU_LISYSetSolenoid(boolean solOn, byte solNum);
+void RPU_LISYSendSoundCommand(byte soundNum);
 #endif
 
 volatile byte SwitchesMinus2[NUM_SWITCH_BYTES];
@@ -1485,7 +1489,7 @@ void RPU_ClearUpDownSwitchState() {
 // RPU_MPU_ARCHITECTURE >= 10
 boolean RPU_GetUpDownSwitchState() {
 #if (RPU_OS_HARDWARE_REV==200)
-  return LISYSwitchStates[65] ? true : false;
+  return LISYSwitchStates[65] ? false : true;
 #endif  
   return UpDownSwitch;
 }
@@ -1673,12 +1677,17 @@ void RPU_SetContinuousSolenoid(boolean solOn, byte solNum) {
   if (solOn) ContinuousSolenoidBits |= (1 << solNum);
   else ContinuousSolenoidBits &= ~(1 << solNum);
 
+#if (RPU_OS_HARDWARE_REV==200)
+  RPU_LISYSetSolenoid(solOn, solNum);
+#else
+
   if (oldCont != ContinuousSolenoidBits) {
     byte origPortA = RPU_DataRead(PIA_SOLENOID_PORT_A);
     byte origPortB = RPU_DataRead(PIA_SOLENOID_PORT_B);
     if (origPortA != (ContinuousSolenoidBits & 0xFF)) RPU_DataWrite(PIA_SOLENOID_PORT_A, (ContinuousSolenoidBits & 0xFF));
     if (origPortB != (ContinuousSolenoidBits / 256)) RPU_DataWrite(PIA_SOLENOID_PORT_B, (ContinuousSolenoidBits / 256));
   }
+#endif  
 }
 
 // RPU_MPU_ARCHITECTURE >= 10
@@ -2547,6 +2556,9 @@ int SpaceLeftOnSoundStack() {
 
 // RPU_OS_USE_WTYPE_1_SOUND or RPU_OS_USE_WTYPE_2_SOUND
 void RPU_PushToSoundStack(unsigned short soundNumber, byte numPushes) {
+#if (RPU_OS_HARDWARE_REV==200)
+  RPU_LISYSendSoundCommand(soundNumber/256);
+#else 
   // If the solenoid stack last index is out of range, then it's an error - return
   if (SpaceLeftOnSoundStack() == 0) return;
   if (soundNumber < SoundLowerLimit || soundNumber > SoundUpperLimit) return;
@@ -2562,6 +2574,7 @@ void RPU_PushToSoundStack(unsigned short soundNumber, byte numPushes) {
     // If the stack is now full, return
     if (SpaceLeftOnSoundStack() == 0) return;
   }
+#endif  
 }
 
 // RPU_OS_USE_WTYPE_1_SOUND or RPU_OS_USE_WTYPE_2_SOUND
@@ -4017,6 +4030,8 @@ unsigned long RPU_InitializeMPUArch10(unsigned long initOptions, byte creditRese
 #define LISY_CMD_SET_SEGMENT_DISPLAY              0x1E
 #define LISY_CMD_GET_STATUS_OF_SWITCH             0x28
 #define LISY_CMD_GET_CHANGED_SWITCHES             0x29
+#define LISY_CMD_PLAY_SOUND                       0x32
+#define LISY_CMD_SET_SOUND_VOLUME                 0x36
 #define LISY_CMD_PET_WATCHDOG                     0x65
 
 #define LISY_RESPONSE_IDLE                        0x00
@@ -4186,9 +4201,32 @@ void RPU_LISYSetSimpleLampState(byte lampNum, byte lampOn) {
   LISYOutputSerial.write(lampNum);
 }
 
-void RPU_LISYSendSolenoidPulse(byte solNum) {
+void RPU_LISYSendSolenoidPulse(byte solNum) {  
   LISYOutputSerial.write(LISY_CMD_PULSE_SOLENOID);
   LISYOutputSerial.write(solNum);
+}
+
+
+void RPU_LISYSetSolenoid(boolean solOn, byte solNum) {
+  noInterrupts();
+  if (solOn) {
+    LISYOutputSerial.write(LISY_CMD_ENABLE_SOLENOID_FULL_POWER);
+    LISYOutputSerial.write(solNum);
+  } else {
+    LISYOutputSerial.write(LISY_CMD_DISABLE_SOLENOID);
+    LISYOutputSerial.write(solNum);
+  }
+  interrupts();
+}
+
+void RPU_LISYSendSoundCommand(byte soundNum) {
+  if (soundNum>=LISYNumSounds) return;
+  noInterrupts();
+  LISYOutputSerial.write(LISY_CMD_PLAY_SOUND);
+  LISYOutputSerial.write(1); // track 1
+  LISYOutputSerial.write(soundNum); // sound to play on track 1
+  interrupts();
+  
 }
 
 
@@ -4218,6 +4256,7 @@ ISR(TIMER1_COMPA_vect) {    //This is the interrupt request (running at 965.3 Hz
     if (solenoidOn!=SOLENOID_STACK_EMPTY) {
       RPU_LISYSendSolenoidPulse(solenoidOn);
     }
+
     LISYISRPass = 1;
   }
 
@@ -4271,6 +4310,22 @@ void RPU_LISYGetNumSwitches() {
     LISYNumSwitches = 64;
   }
 }
+
+
+void RPU_LISYSetSoundVolume(byte newVolume) {
+  if (newVolume>100) newVolume = 100;
+    LISYOutputSerial.write(LISY_CMD_SET_SOUND_VOLUME);
+    LISYOutputSerial.write(1);
+    LISYOutputSerial.write(newVolume);
+}
+
+
+void RPU_LISYGetSoundCount() {
+  if (!RPU_LISYRequestValue(LISY_CMD_GET_SOUND_COUNT, LISYNumSounds)) {
+    LISYNumSounds = 32;
+  }
+}
+
 
 void RPU_LISYSendGameOverState(boolean gameOver) {
   noInterrupts();
@@ -4355,9 +4410,14 @@ void RPU_LISYProcessIncoming(unsigned long currentTime) {
         // A switch changed state; update game logic
         uint8_t switchId = response & 0x7F;
         bool isClosed = (response & 0x80) != 0;
+
+//        char buf[128];
+//        sprintf(buf, "SW=0x%02X\n", switchID);
+//        Serial.write(buf);
+
         if (isClosed) {
-          if (switchId!=66) RPU_PushToSwitchStack(switchId);
-          else RPU_PushToSwitchStack(SW_SELF_TEST_SWITCH);
+          if (switchId<64) PushToSwitchStack(switchId);
+          else if (switchId==64) PushToSwitchStack(SW_SELF_TEST_SWITCH);
           LISYSwitchStates[switchId] = 1;
         } else {
           LISYSwitchStates[switchId] = 0;
@@ -4371,7 +4431,7 @@ void RPU_LISYProcessIncoming(unsigned long currentTime) {
 void RPU_LISYUpdate(unsigned long currentTime) {
   RPU_LISYProcessIncoming(currentTime);
   
-  if (currentTime > (LISYLastWatchdog + 400)) {
+  if (currentTime > (LISYLastWatchdog + 250)) {
     LISYLastWatchdog = currentTime;
     LISYOutputSerial.write(LISY_CMD_PET_WATCHDOG);
     RPU_LISYPushExpectation(LISY_RESPONSE_WATCHDOG, currentTime);
@@ -4392,7 +4452,7 @@ unsigned long RPU_InitializeMPUArch10ThroughLISY(unsigned long initOptions, byte
   GameOverLine = true;
 
   boolean switchStateClosed = false;
-  pinMode(RPU_SWITCH_PIN, INPUT);
+  pinMode(RPU_SWITCH_PIN, INPUT_PULLUP);
   if (digitalRead(RPU_SWITCH_PIN)) {
     switchStateClosed = true;
     retResult |= RPU_RET_SELECTOR_SWITCH_ON;
@@ -4452,6 +4512,8 @@ unsigned long RPU_InitializeMPUArch10ThroughLISY(unsigned long initOptions, byte
     RPU_LISYGetFirmwareVersion();
     RPU_LISYGetSimpleLamps();
     RPU_LISYGetNumSwitches();
+    RPU_LISYGetSoundCount();
+    RPU_LISYSetSoundVolume(100);
 
     // Read the current switch states
     RPU_LISYReadAllSwitches();
