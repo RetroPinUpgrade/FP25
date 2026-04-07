@@ -129,7 +129,7 @@ volatile byte OldLampStates[RPU_NUM_LAMP_BANKS];
 unsigned long LISYLastWatchdog = 0;
 volatile byte LISYISRPass = 0;
 byte LISYNumSwitches = 0;
-byte LISYNumSounds = 0;
+byte LISYNumSounds = 64;
 byte LISYNumSimpleLamps = 0;
 byte LISYSwitchStates[127];
 char LISYAPIVersion[32];
@@ -4050,6 +4050,7 @@ struct LISYExpectation {
 struct LISYExpectation LISYExpectQueue[LISY_EXPECT_QUEUE_SIZE];
 byte LISYExpectHead = 0;
 byte LISYExpectTail = 0;
+unsigned long LISYLastTimeSoundSent = 0;
 
 // Push an expected response type and timestamp onto the queue
 void RPU_LISYPushExpectation(byte responseType, unsigned long currentTime) {
@@ -4219,14 +4220,24 @@ void RPU_LISYSetSolenoid(boolean solOn, byte solNum) {
   interrupts();
 }
 
+void RPU_LISYSendSoundClearCommand() {
+  noInterrupts();
+  LISYOutputSerial.write(LISY_CMD_PLAY_SOUND);
+  LISYOutputSerial.write(1); // track 1
+  LISYOutputSerial.write(0); // Clear sound lines
+  LISYLastTimeSoundSent = 0;
+  interrupts();  
+}
+
 void RPU_LISYSendSoundCommand(byte soundNum) {
   if (soundNum>=LISYNumSounds) return;
+
   noInterrupts();
   LISYOutputSerial.write(LISY_CMD_PLAY_SOUND);
   LISYOutputSerial.write(1); // track 1
   LISYOutputSerial.write(soundNum); // sound to play on track 1
-  interrupts();
-  
+  LISYLastTimeSoundSent = millis();
+  interrupts();  
 }
 
 
@@ -4435,6 +4446,8 @@ void RPU_LISYUpdate(unsigned long currentTime) {
     LISYLastWatchdog = currentTime;
     LISYOutputSerial.write(LISY_CMD_PET_WATCHDOG);
     RPU_LISYPushExpectation(LISY_RESPONSE_WATCHDOG, currentTime);
+  } else if (LISYLastTimeSoundSent && (currentTime-LISYLastTimeSoundSent)>100) {
+    RPU_LISYSendSoundClearCommand();
   } else {
     // Burst requests to clear out any backlog on Pete's board
     for (byte i = 0; i < 3; i++) {

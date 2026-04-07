@@ -21,7 +21,7 @@
 #define DEBUG_MESSAGES  1
 
 #if (DEBUG_MESSAGES==1)
-#define DEBUG_SHOW_LOOPS_PER_SECOND
+//#define DEBUG_SHOW_LOOPS_PER_SECOND
 #endif
 
 /*********************************************************************
@@ -1125,7 +1125,7 @@ byte FPSoundTestCallback(byte testNum) {
     RPU_SetDisplay(0, testNum-3);
     RPU_SetDisplayBlank(0, 0xFF);
     Audio.PlaySoundCardWhenPossible(19 * 256, CurrentTime, 0, 50, 10);
-    Audio.PlaySoundCardWhenPossible((testNum-3) * 256, CurrentTime+50, 0, 2000, 10);
+    Audio.PlaySoundCardWhenPossible((testNum-3) * 256, CurrentTime+150, 0, 2000, 10);
   }
 
   if (testNum>33) return 0;
@@ -1265,6 +1265,9 @@ void setup() {
   for (byte count=0; count<3; count++) LastSaucerEjectTime[count] = 0;
   for (byte count=0; count<3; count++) LastCoinSwitchTime[count] = 0;
   LastStartButtonSwitchTime = 0;
+
+  Audio.PlaySoundCardWhenPossible(31 * 256, CurrentTime+3500, 0, 500, 10);
+
 }
 
 
@@ -2826,7 +2829,7 @@ int RunAttractMode(int curState, boolean curStateChanged) {
     Display_UpdateDisplays(0xFF);
     AttractCheckedForTrappedBall = false;
     AttractModeStartTime = CurrentTime;
-    Audio.PlaySoundCardWhenPossible(19 * 256, CurrentTime, 0, 500, 10);
+    Audio.PlaySoundCardWhenPossible(19 * 256, CurrentTime+4950, 0, 500, 10);
     ShowHeadAndApronLamps();
     if (!FreePlayMode) RPU_SetCoinLockout((Credits >= MaximumCredits) ? true : false, SOLCONT_COIN_LOCKOUT);
     else RPU_SetCoinLockout(false, SOLCONT_COIN_LOCKOUT);
