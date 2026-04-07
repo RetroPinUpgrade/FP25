@@ -4231,7 +4231,7 @@ void RPU_LISYSendSoundClearCommand() {
 
 void RPU_LISYSendSoundCommand(byte soundNum) {
   if (soundNum>=LISYNumSounds) return;
-
+  if (LISYLastTimeSoundSent) RPU_LISYSendSoundClearCommand();
   noInterrupts();
   LISYOutputSerial.write(LISY_CMD_PLAY_SOUND);
   LISYOutputSerial.write(1); // track 1
