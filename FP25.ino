@@ -1182,17 +1182,6 @@ void setup() {
   Audio.SetMusicDuckingGain(25);
   Audio.SetSoundFXDuckingGain(20);
 
-  // Tell the OS about game-specific switches
-  // (this is for software-controlled pop bumpers and slings)
-#if (RPU_MPU_ARCHITECTURE<10)
-  // Machines with a -17, -35, 100, and 200 architecture
-  // almost always have software based switch-triggered solenoids.
-  // For those, you can define an array of solenoids and the switches
-  // that will trigger them:
-  RPU_SetupGameSwitches(NUM_SWITCHES_WITH_TRIGGERS, NUM_PRIORITY_SWITCHES_WITH_TRIGGERS, SolenoidAssociatedSwitches);
-
-#endif
-
   // Set up the chips and interrupts
   unsigned long initResult = 0;
   if (DEBUG_MESSAGES) Serial.write("Initializing MPU\n");
@@ -5454,6 +5443,7 @@ void HandleStandupHit(byte switchNum) {
       if (switchNum>SW_1_STANDUP) switchBit = 0x01<<(switchNum-SW_1_STANDUP);
       if ((StandupTargetStatus[CurrentPlayer]&switchBit)==0) {
         // This is a new hit
+        AddToBonus(1);
         // Award points and qualify lock (when appropriate)
         StandupTargetStatus[CurrentPlayer] |= switchBit;
         CurrentScores[CurrentPlayer] += 1000 * PlayfieldMultiplier;
@@ -5601,7 +5591,10 @@ void HandleSaucer(byte saucerNum) {
       OfferLockOrBattle(saucerNum);
     } else {
       // If training is qualified, we can start it here
-      if (!StartPlayerTraining(saucerNum)) RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
+      if (!StartPlayerTraining(saucerNum)) {
+        AddToBonus(1);
+        RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
+      }
     }    
   } else if (GameMode==GAME_MODE_START_TRAINING) {
     // Don't need to do anything if the training is starting
@@ -5646,6 +5639,7 @@ void HandleSaucer(byte saucerNum) {
       if (GameMode==GAME_MODE_BATTLE_2 || GameMode==GAME_MODE_BATTLE_3) {
         RPU_PushToTimedSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, CurrentTime+7500, true);
       } else {
+        AddToBonus(1);
         RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
       }
     }
@@ -5769,6 +5763,7 @@ void HandleFireLane(byte switchNum) {
     } else {
       // this is a new hit
       FireStatus[CurrentPlayer] |= fireBit;
+      AddToBonus(1);
   
       if (DEBUG_MESSAGES) {
         Serial.write("Fire=");
@@ -5851,6 +5846,7 @@ void HandlePowerStandup(byte switchNum) {
     PlaySoundEffect(SOUND_EFFECT_POWER_REHIT);
   } else {
     // this is a new hit
+    AddToBonus(1);
     PowerStatus[CurrentPlayer] |= powerBit;
     if (PowerStatus[CurrentPlayer]==0x07) {
       // Bank is completed
