@@ -126,6 +126,8 @@
 
 #define SOL_KNOCKER                 13
 #define SOL_OUTHOLE                 0
+#define SOL_DROP_LEFT               1
+#define SOL_DROP_RIGHT              2
 #define SOL_SERVE_BALL              7
 #define SOL_LEFT_SAUCER             3
 #define SOL_RIGHT_SAUCER            4

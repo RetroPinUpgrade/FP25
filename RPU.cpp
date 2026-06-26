@@ -1521,6 +1521,12 @@ void RPU_PushToSolenoidStack(byte solenoidNumber, byte numPushes, boolean disabl
   // If the solenoid stack last index is out of range, then it's an error - return
   if (SpaceLeftOnSolenoidStack() == 0) return;
 
+#if (RPU_OS_HARDWARE_REV==200)
+  // For SA LISY, we only need to push once to the stack
+  // because the MPU will handle the actual pulse width.
+  numPushes = 1; 
+#endif
+
   for (int count = 0; count < numPushes; count++) {
     SolenoidStack[SolenoidStackLast] = solenoidNumber;
 
@@ -1646,6 +1652,12 @@ void RPU_EnableSolenoidStack() {
   SolenoidStackEnabled = true;
 }
 
+void RPU_SetSolenoidDefaultPulse(byte solenoidNumber, byte pulseTimeMS) {
+  (void)solenoidNumber;
+  (void)pulseTimeMS;
+}
+
+
 // RPU_MPU_ARCHITECTURE < 10
 boolean RPU_IsSolenoidStackEnabled() {
   return SolenoidStackEnabled;
@@ -1716,6 +1728,13 @@ void RPU_EnableSolenoidStack() {
 boolean RPU_IsSolenoidStackEnabled() {
   return SolenoidStackEnabled;
 }
+
+#if (RPU_OS_HARDWARE_REV!=200)
+void RPU_SetSolenoidDefaultPulse(byte solenoidNumber, byte pulseTimeMS) {
+  (void)solenoidNumber;
+  (void)pulseTimeMS;
+}
+#endif
 
 
 #endif
@@ -1860,7 +1879,10 @@ void RPU_SetDisplayCredits(int value, boolean displayOn, boolean showBothDigits)
 #if (RPU_OS_HARDWARE_REV==200)
   if (  DisplayCreditDigits[0]!=previousDigits[0] || 
         DisplayCreditDigits[1]!=previousDigits[1] || 
-        previousBlank!=DisplayCreditDigitEnable ) RPU_LISYSendScore(4, 2);
+        previousBlank!=DisplayCreditDigitEnable ) {
+
+    RPU_LISYSendScore(4, 2);
+  }
 #endif   
 }
 
@@ -1887,7 +1909,10 @@ void RPU_SetDisplayBallInPlay(int value, boolean displayOn, boolean showBothDigi
 #if (RPU_OS_HARDWARE_REV==200)
   if (  DisplayBIPDigits[0]!=previousDigits[0] || 
         DisplayBIPDigits[1]!=previousDigits[1] || 
-        previousBlank!=DisplayBIPDigitEnable ) RPU_LISYSendScore(5, 2);
+        previousBlank!=DisplayBIPDigitEnable ) {
+
+    RPU_LISYSendScore(5, 2);
+  }
 #endif  
 }
 
@@ -2557,8 +2582,11 @@ int SpaceLeftOnSoundStack() {
 // RPU_OS_USE_WTYPE_1_SOUND or RPU_OS_USE_WTYPE_2_SOUND
 void RPU_PushToSoundStack(unsigned short soundNumber, byte numPushes) {
 #if (RPU_OS_HARDWARE_REV==200)
+#if (RPU_MPU_ARCHITECTURE<13)
   RPU_LISYSendSoundCommand(soundNumber/256);
-#else 
+#else
+  RPU_LISYSendSoundCommand(soundNumber);
+#endif
   // If the solenoid stack last index is out of range, then it's an error - return
   if (SpaceLeftOnSoundStack() == 0) return;
   if (soundNumber < SoundLowerLimit || soundNumber > SoundUpperLimit) return;
@@ -4141,7 +4169,48 @@ void RPU_LISYSendScore(byte displayNumber, byte numDigits) {
 
 #if (RPU_MPU_ARCHITECTURE>=13)
   // The score could have commas
-  
+  if (displayNumber<4) {
+    // The score is just BCD
+    noInterrupts();
+    LISYOutputSerial.write(LISY_CMD_SET_SEGMENT_DISPLAY+displayNumber);
+    LISYOutputSerial.write(numDigits);
+    byte blankMask = 0x01;
+    for (byte digit=0; digit<numDigits; digit++) {
+      byte outputDigit = 0x0F;
+      if (DisplayDigitEnable[displayNumber]&blankMask) outputDigit = DisplayDigits[displayNumber][digit];
+      byte commaBit = 0x01 << (2 * displayNumber);
+      if (digit==3 && (DisplayCommas&commaBit)) outputDigit |= 0x80;
+      if (digit==6 && (DisplayCommas&(commaBit*2))) outputDigit |= 0x80;
+      LISYOutputSerial.write(outputDigit);
+      blankMask *= 2;
+    }
+    interrupts();
+  } else if (displayNumber==4) {
+    noInterrupts();
+
+    LISYOutputSerial.write(LISY_CMD_SET_SEGMENT_DISPLAY+displayNumber);
+    LISYOutputSerial.write(numDigits);
+    byte blankMask = 0x01;
+    for (byte digit=0; digit<numDigits; digit++) {
+      if (DisplayCreditDigitEnable&blankMask) LISYOutputSerial.write(DisplayCreditDigits[digit]);
+      else LISYOutputSerial.write(0x0F); // display a blank
+
+      blankMask *= 2;
+    }
+    interrupts();
+  } else if (displayNumber==5) {
+    noInterrupts();
+    LISYOutputSerial.write(LISY_CMD_SET_SEGMENT_DISPLAY+displayNumber);
+    LISYOutputSerial.write(numDigits);
+    byte blankMask = 0x01;
+    for (byte digit=0; digit<numDigits; digit++) {
+      if (DisplayBIPDigitEnable&blankMask) LISYOutputSerial.write(DisplayBIPDigits[digit]);
+      else LISYOutputSerial.write(0x0F); // display a blank
+
+      blankMask *= 2;
+    }
+    interrupts();
+  }  
 #else
   if (displayNumber<4) {
     // The score is just BCD
@@ -4188,23 +4257,30 @@ void RPU_LISYSendScore(byte displayNumber, byte numDigits) {
 
 void RPU_LISYSetSolenoidPulsetime(byte solNum, byte pulseTime) {
   noInterrupts();
-
+  LISYOutputSerial.write(LISY_CMD_SET_SOLENOID_PULSE_TIME);
+  LISYOutputSerial.write(solNum);
+  LISYOutputSerial.write(pulseTime);
   interrupts();
 }
 
+void RPU_SetSolenoidDefaultPulse(byte solenoidNumber, byte pulseTimeMS) {
+  RPU_LISYSetSolenoidPulsetime(solenoidNumber, pulseTimeMS);
+}
+
+volatile byte LISYMessageError = 0;
 
 void RPU_LISYSetSimpleLampState(byte lampNum, byte lampOn) {
   if (lampOn) {
-    LISYOutputSerial.write(LISY_CMD_SET_SIMPLE_LAMP_ON);
+    if (LISYOutputSerial.write(LISY_CMD_SET_SIMPLE_LAMP_ON)==0) LISYMessageError += 1;
   } else {
-    LISYOutputSerial.write(LISY_CMD_SET_SIMPLE_LAMP_OFF);
+    if (LISYOutputSerial.write(LISY_CMD_SET_SIMPLE_LAMP_OFF)==0) LISYMessageError += 1;
   }
-  LISYOutputSerial.write(lampNum);
+  if (LISYOutputSerial.write(lampNum)==0) LISYMessageError += 1;
 }
 
-void RPU_LISYSendSolenoidPulse(byte solNum) {  
-  LISYOutputSerial.write(LISY_CMD_PULSE_SOLENOID);
-  LISYOutputSerial.write(solNum);
+void RPU_LISYSendSolenoidPulse(byte solNum) {
+  if (LISYOutputSerial.write(LISY_CMD_PULSE_SOLENOID)==0) LISYMessageError += 1;
+  if (LISYOutputSerial.write(solNum)==0) LISYMessageError += 1;
 }
 
 
@@ -4240,35 +4316,29 @@ void RPU_LISYSendSoundCommand(byte soundNum) {
   interrupts();  
 }
 
-
+volatile byte CurrentLampByte = 0;
 // Rev 200 ISR for passing commands to LISY
 ISR(TIMER1_COMPA_vect) {    //This is the interrupt request (running at 965.3 Hz)
-  if (LISYISRPass) {
-    // Odd passes = lamps
-    for (byte curLampByte = 0; curLampByte < RPU_NUM_LAMP_BANKS; curLampByte++) {
-      byte changedLamps = OldLampStates[curLampByte] ^ LampStates[curLampByte];
-      if (changedLamps) {
-        byte curLampBit = 0x01;
-        for (byte curBit = 0; curBit < 8; curBit++) {
-          if (changedLamps & curLampBit) {
-            byte lampNum = curBit + curLampByte*8;
-            RPU_LISYSetSimpleLampState(lampNum, (LampStates[curLampByte]&curLampBit) ? false : true);
-          }
-          curLampBit *= 2;
-        }
-        OldLampStates[curLampByte] = LampStates[curLampByte];
+  byte changedLamps = OldLampStates[CurrentLampByte] ^ LampStates[CurrentLampByte];
+  if (changedLamps) {
+    byte curLampBit = 0x01;
+    for (byte curBit = 0; curBit < 8; curBit++) {
+      if (changedLamps & curLampBit) {
+        byte lampNum = curBit + CurrentLampByte*8;
+        RPU_LISYSetSimpleLampState(lampNum, (LampStates[CurrentLampByte]&curLampBit) ? false : true);
       }
-    }    
-
-    LISYISRPass = 0;
-  } else {
-    // Even passes = solenoids
-    byte solenoidOn = PullFirstFromSolenoidStack();
-    if (solenoidOn!=SOLENOID_STACK_EMPTY) {
-      RPU_LISYSendSolenoidPulse(solenoidOn);
+      curLampBit *= 2;
     }
+    OldLampStates[CurrentLampByte] = LampStates[CurrentLampByte];
+  }
+  CurrentLampByte += 1;
+  if (CurrentLampByte>=RPU_NUM_LAMP_BANKS) {
+    CurrentLampByte = 0;
+  }
 
-    LISYISRPass = 1;
+  byte solenoidOn = PullFirstFromSolenoidStack();
+  if (solenoidOn!=SOLENOID_STACK_EMPTY) {
+    RPU_LISYSendSolenoidPulse(solenoidOn);
   }
 
 }
@@ -4450,10 +4520,12 @@ void RPU_LISYUpdate(unsigned long currentTime) {
     RPU_LISYSendSoundClearCommand();
   } else {
     // Burst requests to clear out any backlog on Pete's board
+    noInterrupts();
     for (byte i = 0; i < 3; i++) {
       LISYOutputSerial.write(LISY_CMD_GET_CHANGED_SWITCHES);
       RPU_LISYPushExpectation(LISY_RESPONSE_SWITCHES, currentTime);
     }
+    interrupts();
   }
 }
 
@@ -4484,11 +4556,13 @@ unsigned long RPU_InitializeMPUArch10ThroughLISY(unsigned long initOptions, byte
 
   boolean bootToOriginal = false;
 
+  // LISY version doesn't have a way to check credit/reset switch during
+  // boot yet, so we're not going to honor that
   if (  (initOptions & RPU_CMD_BOOT_ORIGINAL) ||
         (switchStateClosed && (initOptions & RPU_CMD_BOOT_ORIGINAL_IF_SWITCH_CLOSED))  ||
-        (!switchStateClosed && (initOptions & RPU_CMD_BOOT_ORIGINAL_IF_NOT_SWITCH_CLOSED))  ||
+        (!switchStateClosed && (initOptions & RPU_CMD_BOOT_ORIGINAL_IF_NOT_SWITCH_CLOSED))  /* ||
         (creditResetButtonHit && (initOptions & RPU_CMD_BOOT_ORIGINAL_IF_CREDIT_RESET))  ||
-        (!creditResetButtonHit && (initOptions & RPU_CMD_BOOT_ORIGINAL_IF_NOT_CREDIT_RESET)) ) {
+        (!creditResetButtonHit && (initOptions & RPU_CMD_BOOT_ORIGINAL_IF_NOT_CREDIT_RESET)) */ ) {
 /*
     if (DEBUG_MESSAGES) {
       char buf[128];

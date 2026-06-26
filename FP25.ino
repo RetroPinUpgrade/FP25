@@ -14,11 +14,15 @@
 #include "AudioHandler.h"
 #include "DisplayHandler.h"
 #include "LampAnimations.h"
+#include "DropTargets.h"
 #include <EEPROM.h>
 
 #define GAME_MAJOR_VERSION  2025
-#define GAME_MINOR_VERSION  1
+#define GAME_MINOR_VERSION  2
 #define DEBUG_MESSAGES  1
+
+//#define FP25_USE_DROP_TARGETS 1
+
 
 #if (DEBUG_MESSAGES==1)
 //#define DEBUG_SHOW_LOOPS_PER_SECOND
@@ -456,6 +460,9 @@ boolean MachineStateChanged = true;
 #define TILT_WARNING_DEBOUNCE_TIME      1000
 
 #define BALL_SAVE_GRACE_PERIOD            3000
+
+DropTargetBank DropTargetsL(3, 1, DROP_TARGET_TYPE_WLLMS_1, 50);
+DropTargetBank DropTargetsR(3, 1, DROP_TARGET_TYPE_WLLMS_1, 50);
 
 /*********************************************************************
 
@@ -1157,6 +1164,34 @@ void EjectAllBallsFromSaucers() {
 }
 
 
+void DropsConfigure()
+{
+#ifdef FP25_USE_DROP_TARGETS
+  // Could not locate these, using RPU_LISYSetSolenoidPulsetime instead
+  // RPU_SetSolenoidDefaultPulse(SOL_DROP_LEFT, 50);
+  // RPU_SetSolenoidDefaultPulse(SOL_DROP_RIGHT, 50);
+
+  if (DEBUG_MESSAGES)
+  {
+    Serial.write("DropsConfigure ");
+    Serial.println("");
+  }
+
+  RPU_SetSolenoidDefaultPulse(SOL_DROP_LEFT, 80);
+  RPU_SetSolenoidDefaultPulse(SOL_DROP_RIGHT, 80);
+
+  DropTargetsL.DefineSwitch(0, SW_1_STANDUP);
+  DropTargetsL.DefineSwitch(1, SW_2_STANDUP);
+  DropTargetsL.DefineSwitch(2, SW_3_STANDUP);
+  DropTargetsL.DefineResetSolenoid(0, SOL_DROP_LEFT);
+
+  DropTargetsR.DefineSwitch(0, SW_4_STANDUP);
+  DropTargetsR.DefineSwitch(1, SW_5_STANDUP);
+  DropTargetsR.DefineSwitch(2, SW_6_STANDUP);
+  DropTargetsR.DefineResetSolenoid(0, SOL_DROP_RIGHT);
+#endif
+}
+
 ////////////////////////////////////////////////////////////////////////////
 //
 //  Setup
@@ -1256,7 +1291,7 @@ void setup() {
   LastStartButtonSwitchTime = 0;
 
   Audio.PlaySoundCardWhenPossible(31 * 256, CurrentTime+3500, 0, 500, 10);
-
+  DropsConfigure();
 }
 
 
@@ -3006,6 +3041,23 @@ boolean IncreaseBonusX() {
 }
 
 
+void DropsResetBoth()
+{
+#ifdef FP25_USE_DROP_TARGETS
+
+  if (DEBUG_MESSAGES)
+  {
+    Serial.write("DropsResetBoth");
+    Serial.println();
+  }
+
+  DropTargetsL.ResetDropTargets(CurrentTime + 200, true);
+  DropTargetsR.ResetDropTargets(CurrentTime + 200, true);
+#endif
+}
+
+
+
 
 unsigned long GameStartNotificationTime = 0;
 boolean WaitForBallToReachOuthole = false;
@@ -3255,6 +3307,7 @@ int InitNewBall(bool curStateChanged) {
     PlayBackgroundSong(curBackgroundSong);
 //    Audio.OutputTracksPlaying();
     RPU_EnableSolenoidStack();
+    DropsResetBoth();
     RPU_SetDisableFlippers(false);
     ShowHeadAndApronLamps();
   }
@@ -3281,6 +3334,139 @@ int InitNewBall(bool curStateChanged) {
   return MACHINE_STATE_INIT_NEW_BALL;
 }
 
+
+void OfferLockOrBattle(byte saucerNum) {
+  // Logic for battles & locks:
+  //  If you haven't attempted any battles, you can only attempt 2 or 3
+  //  If you have attempted a battle, you can then attempt 1
+  //  If you've attempted a 1 and a 2, you have to attempt a 3 before you can do them again
+  byte countBits = CountBits(PlayerLocks[CurrentPlayer] & BALL_LOCKS_ENGAGED);
+  OfferBattleSaucer = saucerNum;
+  if (countBits==0) {
+    if (BattlesPlayed[CurrentPlayer]&0x04) {
+      // 4, 5, 6, 7
+      SetGameMode(GAME_MODE_OFFER_BATTLE_1);      
+    } else if (BattlesPlayed[CurrentPlayer]==0x02) {
+      // 2
+      SetGameMode(GAME_MODE_OFFER_BATTLE_1);
+    } else {
+      // 0, 1, 3
+      LockInsteadOfBattle();
+    }
+  } else if (countBits==1) {
+    if (BattlesPlayed[CurrentPlayer]&0x04) {
+      // 4, 5, 6, 7
+      SetGameMode(GAME_MODE_OFFER_BATTLE_2);
+    } else if (!(BattlesPlayed[CurrentPlayer]&0x01)) {
+      // 0, 2
+      SetGameMode(GAME_MODE_OFFER_BATTLE_2);
+    } else {
+      // 1, 3
+      LockInsteadOfBattle();
+    }
+  } else if (countBits==2) {
+    SetGameMode(GAME_MODE_START_BATTLE_3);
+  }
+  
+}
+
+
+
+
+
+void HandleSaucer(byte saucerNum) {
+
+  // If this lock is already filled (for any player)
+  // then this is a "knocked" ball and we should ignore this lock
+  if (MachineLocks&(BALL_LEFT_LOCK_ENGAGED << saucerNum)) return;
+
+  ValidateAndRegisterPlayfieldSwitch();
+  if (0 && GameMode==GAME_MODE_SKILL_SHOT) {
+    ValidateAndRegisterPlayfieldSwitch();
+    // Give an award for a saucer skillshot 
+    byte qualifiedBit = BALL_LEFT_LOCK_QUALIFIED<<saucerNum;
+    byte lockBit = BALL_LEFT_LOCK_ENGAGED<<saucerNum;
+    if ( (PlayerLocks[CurrentPlayer] & lockBit) || (MachineLocks & lockBit) ) {
+      // This can't be true, can it?
+      PlayerLocks[CurrentPlayer] &= ~lockBit;
+      MachineLocks &= ~lockBit;
+      RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
+    } else {
+      if (PlayerLocks[CurrentPlayer] & qualifiedBit) {
+        // Offer a ball lock or battle
+        OfferLockOrBattle(saucerNum);
+      } else {
+        if (SkillShotQualifiesLock) {
+          PlayerLocks[CurrentPlayer] |= qualifiedBit;
+        }
+        // Add score and play a notification
+        QueueNotification(SOUND_EFFECT_VP_SUPER_SKILL_SHOT_1 + CurrentTime%3, 5);
+        Display_StartScoreAnimation(SKILL_SHOT_REWARD * ((unsigned long)2), true);
+        RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
+      }
+    }
+    RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
+  } else if (GameMode==GAME_MODE_UNSTRUCTURED_PLAY || GameMode==GAME_MODE_SKILL_SHOT) {
+    byte qualifiedBit = BALL_LEFT_LOCK_QUALIFIED<<saucerNum;
+    if (PlayerLocks[CurrentPlayer] & qualifiedBit) {
+      // Offer a ball lock or battle
+      OfferLockOrBattle(saucerNum);
+    } else {
+      // If training is qualified, we can start it here
+      if (!StartPlayerTraining(saucerNum)) {
+        AddToBonus(1);
+        RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
+      }
+    }    
+  } else if (GameMode==GAME_MODE_START_TRAINING) {
+    // Don't need to do anything if the training is starting
+    // because eject will be handled by the ManageGameMode function
+  } else if (GameMode==GAME_MODE_BOSS_BATTLE) {
+    BossSaucerKickoutTime[saucerNum] = CurrentTime + BOSS_BATTLE_SAUCER_HOLD_TIME;
+  } else {
+    if (BattleStage==BATTLE_STAGE_SAUCER && saucerNum==OfferBattleSaucer) {
+      if (BattleStageShots) BattleStageShots -= 1;
+      LastTimeBattleShotHit = CurrentTime;
+      if (BattleStageShots==0) {
+        // the battle is finished, so we'll let GAME_MODE_BATTLE_1_WON kick the ball
+      } else {
+        // Battle not finished yet
+        RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
+      }
+    } else if (GameMode==GAME_MODE_BATTLE_1 && saucerNum==OfferBattleSaucer) {
+      BattleRefuelingTime = CurrentTime;
+      Display_ClearOverride(0xFF);
+      if (!RefuelingMessagePlayed) {
+        RefuelingMessagePlayed = true;
+        QueueNotification(SOUND_EFFECT_VP_REFUELING, 5);
+      }
+    } else if (JackpotReady) {
+      JackpotReady = false;
+      switch (NumberOfBallsInPlay) {
+        case 1:
+          Display_StartScoreAnimation( ((unsigned long)JackpotValue[CurrentPlayer] * ((unsigned long)PlayerRank[CurrentPlayer]+1) * 1000) * PlayfieldMultiplier, true);
+          QueueNotification(SOUND_EFFECT_VP_JACKPOT_1 + CurrentTime%6, 5);
+          break;
+        case 2:
+          Display_StartScoreAnimation( ((unsigned long)JackpotValue[CurrentPlayer] * ((unsigned long)PlayerRank[CurrentPlayer]+1) * 2000) * PlayfieldMultiplier, true);
+          QueueNotification(SOUND_EFFECT_VP_DOUBLE_JACKPOT, 5);
+          break;
+        case 3:
+          Display_StartScoreAnimation( ((unsigned long)JackpotValue[CurrentPlayer] * ((unsigned long)PlayerRank[CurrentPlayer]+1) * 3000) * PlayfieldMultiplier, true);
+          QueueNotification(SOUND_EFFECT_VP_TRIPLE_JACKPOT, 5);
+          break;
+      }
+      RPU_PushToTimedSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, CurrentTime+5000, true);
+    } else {
+      if (GameMode==GAME_MODE_BATTLE_2 || GameMode==GAME_MODE_BATTLE_3) {
+        RPU_PushToTimedSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, CurrentTime+7500, true);
+      } else {
+        AddToBonus(1);
+        RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
+      }
+    }
+  }
+}
 
 
 
@@ -3400,6 +3586,7 @@ void UpdateTimers() {
   }
 
 }
+
 
 
 
@@ -3679,6 +3866,8 @@ int ManageGameMode() {
 
   CheckSaucersForBall();
   UpdateTimers();
+  DropTargetsL.Update(CurrentTime);
+  DropTargetsR.Update(CurrentTime);
 
   if (RPU_ReadSingleSwitchState(SW_RIGHT_FLIPPER)) {
     if (RightFlipperDown==0) {
@@ -5285,6 +5474,35 @@ void CompletePlayerTraining(byte trainingMode) {
 }
 
 
+
+void GiveFirePowerAward() {
+  switch (FirePowerLevel[CurrentPlayer]) {
+    case 0:
+      CurrentScores[CurrentPlayer] += (1000 * PlayfieldMultiplier);
+      break;
+    case 1:
+      Display_StartScoreAnimation(10000 * PlayfieldMultiplier, true);
+      break;
+    case 2:
+      Display_StartScoreAnimation(30000 * PlayfieldMultiplier, true);
+      break;
+    case 3:
+      Display_StartScoreAnimation(50000 * PlayfieldMultiplier, true);
+      break;
+    case 4:
+      Display_StartScoreAnimation(65000 * PlayfieldMultiplier, true);
+      break;
+    case 5:
+      Display_StartScoreAnimation(75000 * PlayfieldMultiplier, true);
+      break;
+    default:
+      Display_StartScoreAnimation(100000 * PlayfieldMultiplier, true);
+      break;    
+  }
+}
+
+
+
 unsigned long LastBullseyeHit = 0;
 
 void HandleBullseye() {
@@ -5397,7 +5615,58 @@ void AddBossBattleHit() {
 }
 
 
+
+
+void DropsProcessStatus(byte switchNum)
+{
+#ifdef FP25_USE_DROP_TARGETS
+
+  if (DEBUG_MESSAGES)
+  {
+    Serial.write("DropsProcessStatus ");
+    Serial.print(switchNum);
+    Serial.println("");
+  }
+
+  switch (switchNum)
+  {
+  case SW_1_STANDUP:
+  case SW_2_STANDUP:
+  case SW_3_STANDUP:
+    DropTargetsL.HandleDropTargetHit(switchNum);
+    break;
+  case SW_4_STANDUP:
+  case SW_5_STANDUP:
+  case SW_6_STANDUP:
+    DropTargetsR.HandleDropTargetHit(switchNum);
+    break;
+  }
+
+  if (DropTargetsL.CheckIfBankCleared())
+  {
+    Serial.write("DropTargetsL Cleared");
+    Serial.println();
+    DropTargetsL.ResetDropTargets(CurrentTime + 200, true);
+  }
+
+  if (DropTargetsR.CheckIfBankCleared())
+  {
+    Serial.write("DropTargetsR Cleared");
+    Serial.println();
+    DropTargetsR.ResetDropTargets(CurrentTime + 200, true);
+  }
+#endif
+}
+
+
+
+
+
 void HandleStandupHit(byte switchNum) {
+
+#ifdef FP25_USE_DROP_TARGETS
+  DropsProcessStatus(switchNum);
+#endif
 
   byte standupID = switchNum - SW_1_STANDUP;
   if (switchNum>=SW_4_STANDUP) {
@@ -5516,162 +5785,7 @@ void HandleStandupHit(byte switchNum) {
 }
 
 
-void OfferLockOrBattle(byte saucerNum) {
-  // Logic for battles & locks:
-  //  If you haven't attempted any battles, you can only attempt 2 or 3
-  //  If you have attempted a battle, you can then attempt 1
-  //  If you've attempted a 1 and a 2, you have to attempt a 3 before you can do them again
-  byte countBits = CountBits(PlayerLocks[CurrentPlayer] & BALL_LOCKS_ENGAGED);
-  OfferBattleSaucer = saucerNum;
-  if (countBits==0) {
-    if (BattlesPlayed[CurrentPlayer]&0x04) {
-      // 4, 5, 6, 7
-      SetGameMode(GAME_MODE_OFFER_BATTLE_1);      
-    } else if (BattlesPlayed[CurrentPlayer]==0x02) {
-      // 2
-      SetGameMode(GAME_MODE_OFFER_BATTLE_1);
-    } else {
-      // 0, 1, 3
-      LockInsteadOfBattle();
-    }
-  } else if (countBits==1) {
-    if (BattlesPlayed[CurrentPlayer]&0x04) {
-      // 4, 5, 6, 7
-      SetGameMode(GAME_MODE_OFFER_BATTLE_2);
-    } else if (!(BattlesPlayed[CurrentPlayer]&0x01)) {
-      // 0, 2
-      SetGameMode(GAME_MODE_OFFER_BATTLE_2);
-    } else {
-      // 1, 3
-      LockInsteadOfBattle();
-    }
-  } else if (countBits==2) {
-    SetGameMode(GAME_MODE_START_BATTLE_3);
-  }
-  
-}
 
-
-void HandleSaucer(byte saucerNum) {
-
-  // If this lock is already filled (for any player)
-  // then this is a "knocked" ball and we should ignore this lock
-  if (MachineLocks&(BALL_LEFT_LOCK_ENGAGED << saucerNum)) return;
-
-  ValidateAndRegisterPlayfieldSwitch();
-  if (0 && GameMode==GAME_MODE_SKILL_SHOT) {
-    ValidateAndRegisterPlayfieldSwitch();
-    // Give an award for a saucer skillshot 
-    byte qualifiedBit = BALL_LEFT_LOCK_QUALIFIED<<saucerNum;
-    byte lockBit = BALL_LEFT_LOCK_ENGAGED<<saucerNum;
-    if ( (PlayerLocks[CurrentPlayer] & lockBit) || (MachineLocks & lockBit) ) {
-      // This can't be true, can it?
-      PlayerLocks[CurrentPlayer] &= ~lockBit;
-      MachineLocks &= ~lockBit;
-      RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
-    } else {
-      if (PlayerLocks[CurrentPlayer] & qualifiedBit) {
-        // Offer a ball lock or battle
-        OfferLockOrBattle(saucerNum);
-      } else {
-        if (SkillShotQualifiesLock) {
-          PlayerLocks[CurrentPlayer] |= qualifiedBit;
-        }
-        // Add score and play a notification
-        QueueNotification(SOUND_EFFECT_VP_SUPER_SKILL_SHOT_1 + CurrentTime%3, 5);
-        Display_StartScoreAnimation(SKILL_SHOT_REWARD * ((unsigned long)2), true);
-        RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
-      }
-    }
-    RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
-  } else if (GameMode==GAME_MODE_UNSTRUCTURED_PLAY || GameMode==GAME_MODE_SKILL_SHOT) {
-    byte qualifiedBit = BALL_LEFT_LOCK_QUALIFIED<<saucerNum;
-    if (PlayerLocks[CurrentPlayer] & qualifiedBit) {
-      // Offer a ball lock or battle
-      OfferLockOrBattle(saucerNum);
-    } else {
-      // If training is qualified, we can start it here
-      if (!StartPlayerTraining(saucerNum)) {
-        AddToBonus(1);
-        RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
-      }
-    }    
-  } else if (GameMode==GAME_MODE_START_TRAINING) {
-    // Don't need to do anything if the training is starting
-    // because eject will be handled by the ManageGameMode function
-  } else if (GameMode==GAME_MODE_BOSS_BATTLE) {
-    BossSaucerKickoutTime[saucerNum] = CurrentTime + BOSS_BATTLE_SAUCER_HOLD_TIME;
-  } else {
-    if (BattleStage==BATTLE_STAGE_SAUCER && saucerNum==OfferBattleSaucer) {
-      if (BattleStageShots) BattleStageShots -= 1;
-      LastTimeBattleShotHit = CurrentTime;
-      if (BattleStageShots==0) {
-        // the battle is finished, so we'll let GAME_MODE_BATTLE_1_WON kick the ball
-      } else {
-        // Battle not finished yet
-        RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
-      }
-    } else if (GameMode==GAME_MODE_BATTLE_1 && saucerNum==OfferBattleSaucer) {
-      BattleRefuelingTime = CurrentTime;
-      Display_ClearOverride(0xFF);
-      if (!RefuelingMessagePlayed) {
-        RefuelingMessagePlayed = true;
-        QueueNotification(SOUND_EFFECT_VP_REFUELING, 5);
-      }
-    } else if (JackpotReady) {
-      JackpotReady = false;
-      switch (NumberOfBallsInPlay) {
-        case 1:
-          Display_StartScoreAnimation( ((unsigned long)JackpotValue[CurrentPlayer] * ((unsigned long)PlayerRank[CurrentPlayer]+1) * 1000) * PlayfieldMultiplier, true);
-          QueueNotification(SOUND_EFFECT_VP_JACKPOT_1 + CurrentTime%6, 5);
-          break;
-        case 2:
-          Display_StartScoreAnimation( ((unsigned long)JackpotValue[CurrentPlayer] * ((unsigned long)PlayerRank[CurrentPlayer]+1) * 2000) * PlayfieldMultiplier, true);
-          QueueNotification(SOUND_EFFECT_VP_DOUBLE_JACKPOT, 5);
-          break;
-        case 3:
-          Display_StartScoreAnimation( ((unsigned long)JackpotValue[CurrentPlayer] * ((unsigned long)PlayerRank[CurrentPlayer]+1) * 3000) * PlayfieldMultiplier, true);
-          QueueNotification(SOUND_EFFECT_VP_TRIPLE_JACKPOT, 5);
-          break;
-      }
-      RPU_PushToTimedSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, CurrentTime+5000, true);
-    } else {
-      if (GameMode==GAME_MODE_BATTLE_2 || GameMode==GAME_MODE_BATTLE_3) {
-        RPU_PushToTimedSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, CurrentTime+7500, true);
-      } else {
-        AddToBonus(1);
-        RPU_PushToSolenoidStack(SaucerSolenoids[saucerNum], SaucerSolenoidStrength, true);
-      }
-    }
-  }
-}
-
-
-void GiveFirePowerAward() {
-  switch (FirePowerLevel[CurrentPlayer]) {
-    case 0:
-      CurrentScores[CurrentPlayer] += (1000 * PlayfieldMultiplier);
-      break;
-    case 1:
-      Display_StartScoreAnimation(10000 * PlayfieldMultiplier, true);
-      break;
-    case 2:
-      Display_StartScoreAnimation(30000 * PlayfieldMultiplier, true);
-      break;
-    case 3:
-      Display_StartScoreAnimation(50000 * PlayfieldMultiplier, true);
-      break;
-    case 4:
-      Display_StartScoreAnimation(65000 * PlayfieldMultiplier, true);
-      break;
-    case 5:
-      Display_StartScoreAnimation(75000 * PlayfieldMultiplier, true);
-      break;
-    default:
-      Display_StartScoreAnimation(100000 * PlayfieldMultiplier, true);
-      break;    
-  }
-}
 
 
 boolean CheckForFirePowerIncrease(boolean powerComplete) {
