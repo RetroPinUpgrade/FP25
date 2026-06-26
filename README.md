@@ -9,7 +9,11 @@ RPU now supports System Alpha X1 board. To use with System Alpha X1, go into RPU
 ```
 #define RPU_OS_HARDWARE_REV   200
 ```
-
+## Drop Target Support (thanks Joel_)  
+If you have drop targets in your machine instead of standups, go into your FP25.ino file and look near the top. Find this line and "uncomment" it, meaning delete the two slashes (//) in front of the line before you compile and upload.
+```
+//#define FP25_USE_DROP_TARGETS 1
+```
 
 ## Instructions for building & installing RPU   
 https://www.pinballrefresh.com/retro-pin-upgrade-rpu  
