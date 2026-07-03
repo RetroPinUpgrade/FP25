@@ -1292,6 +1292,13 @@ void setup() {
 
   Audio.PlaySoundCardWhenPossible(31 * 256, CurrentTime+3500, 0, 500, 10);
   DropsConfigure();
+
+  RPU_SetSolenoidDefaultPulse(SOL_OUTHOLE, 50);  
+  RPU_SetSolenoidDefaultPulse(SOL_SERVE_BALL, 50);  
+  RPU_SetSolenoidDefaultPulse(SOL_LEFT_SAUCER, 50);  
+  RPU_SetSolenoidDefaultPulse(SOL_RIGHT_SAUCER, 50);  
+  RPU_SetSolenoidDefaultPulse(SOL_TOP_SAUCER, 50);  
+  RPU_SetSolenoidDefaultPulse(SOL_BALLSAVE_KICKER, 50);  
 }
 
 
